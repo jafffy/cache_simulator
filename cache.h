@@ -61,6 +61,7 @@ typedef struct cache_stat_ {
 /* function prototypes */
 void set_cache_param();
 void init_cache();
+void destory_cache();
 void perform_access();
 void flush();
 void delete();

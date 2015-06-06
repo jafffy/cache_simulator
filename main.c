@@ -20,6 +20,7 @@ int main(argc, argv)
   init_cache();
   play_trace(traceFile);
   print_stats();
+  destroy_cache();
 }
 
 
