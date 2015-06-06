@@ -3,6 +3,7 @@
  */
 
 
+#include <memory.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <math.h>
@@ -79,15 +80,12 @@ void set_cache_param(param, value)
 /************************************************************/
 void init_cache()
 {
-
-  /* initialize the cache, and cache statistics data structures */
-
   // Use c1 as Unified cache
   c1.size = cache_usize;
   c1.associativity = 0;
   c1.n_sets = c1.size / cache_block_size;
-  c1.index_mask = c1.size / cache_block_size - 1;
-  c1.index_mask_offset = 32 - ((int)LOG2(c1.index_mask) + 1); // what is it...
+  c1.index_mask = c1.n_sets - 1;
+  c1.index_mask_offset = LOG2(c1.index_mask); // what is it...
 
   c1.LRU_head = (Pcache_line*)malloc(sizeof(Pcache_line)*c1.n_sets);
   {
@@ -99,11 +97,8 @@ void init_cache()
   c1.LRU_tail = c1.LRU_head + c1.n_sets - 1;
 
   // statistics setting 
-  cache_stat_inst.accesses = 0;
-  cache_stat_inst.misses = 0;
-  cache_stat_inst.replacements = 0;
-  cache_stat_inst.demand_fetches = 0;
-  cache_stat_inst.copies_back = 0;
+  memset(&cache_stat_inst, 0, sizeof(cache_stat));
+  memset(&cache_stat_data, 0, sizeof(cache_stat));
 }
 /************************************************************/
 
@@ -146,7 +141,7 @@ void increment_cache_stat(enum E_CACHE_STAT cache_stat, unsigned access_type)
     stat->misses++;
 	break;
   case ECS_REPLACEMENTS:
-    stat->replacements;
+    stat->replacements++;
 	break;
   case ECS_DEMAND_FETCHES:
     stat->demand_fetches++;
@@ -157,26 +152,33 @@ void increment_cache_stat(enum E_CACHE_STAT cache_stat, unsigned access_type)
   }
 }
 
+static int cold_miss = 0;
+
 /************************************************************/
 /* handle an access to the cache */
 void perform_access(addr, access_type)
   unsigned addr, access_type;
 {
-  unsigned idx, tag;
+  int idx, tag;
 
   increment_cache_stat(ECS_ACCESSES, access_type);
+
+  // calculate index and tag
   idx = (addr & c1.index_mask);
   tag = (addr & ~c1.index_mask) >> c1.index_mask_offset;
 
-  if (access_type == 0 || access_type == 2) { // read
-	if (c1.LRU_head[idx] == NULL) { // cold miss
-	  increment_cache_stat(ECS_MISSES, access_type);
-	  increment_cache_stat(ECS_DEMAND_FETCHES, access_type);
+  // cold miss
+  if (c1.LRU_head[idx] == NULL) {
+	increment_cache_stat(ECS_MISSES, access_type);
+	increment_cache_stat(ECS_DEMAND_FETCHES, access_type);
 
-	  c1.LRU_head[idx] = (Pcache_line)malloc(sizeof(cache_line));
-	  c1.LRU_head[idx]->tag = tag;
-	  c1.LRU_head[idx]->dirty = FALSE;
-	} else if (c1.LRU_head[idx]->tag != tag) {
+	c1.LRU_head[idx] = (Pcache_line)malloc(sizeof(cache_line));
+	c1.LRU_head[idx]->tag = tag;
+	c1.LRU_head[idx]->dirty = cache_writeback ? TRUE : FALSE;
+  }
+
+  if (access_type == 0 || access_type == 2) { // read
+	if (c1.LRU_head[idx]->tag != tag) {
 	  increment_cache_stat(ECS_MISSES, access_type);
 	  increment_cache_stat(ECS_DEMAND_FETCHES, access_type);
 	  increment_cache_stat(ECS_REPLACEMENTS, access_type);
@@ -190,24 +192,21 @@ void perform_access(addr, access_type)
 	  }
 	}
   } else if (access_type == 1) { // write
-	if (cache_writeback && cache_writealloc) {
-	  if (c1.LRU_head[idx] == NULL) { // cold miss
+	  if (c1.LRU_head[idx]->tag != tag) {
 		increment_cache_stat(ECS_MISSES, access_type);
 
-	    c1.LRU_head[idx] = (Pcache_line)malloc(sizeof(cache_line));
-	    c1.LRU_head[idx]->tag = tag;
-	  } else if (c1.LRU_head[idx]->tag != tag) {
-		increment_cache_stat(ECS_MISSES, access_type);
-
-		c1.LRU_head[idx]->tag = tag;
+		if (cache_writealloc) {
+		  c1.LRU_head[idx]->tag = tag;
+		}
 
 		if (cache_writeback && c1.LRU_head[idx]->dirty) {
 		  increment_cache_stat(ECS_COPIES_BACK, access_type);
+		} else if (cache_writeback == FALSE) {
+		  increment_cache_stat(ECS_COPIES_BACK, access_type); 
+		} else if (cache_writealloc == FALSE) {
+		  increment_cache_stat(ECS_COPIES_BACK, access_type);
 		}
 	  }
-
-	  c1.LRU_head[idx]->dirty = TRUE;
-	}
   }
 }
 /************************************************************/
@@ -216,10 +215,14 @@ void perform_access(addr, access_type)
 /* flush the cache */
 void flush()
 {
+  printf("%u\n", cold_miss);
   int i;
 
   // directed mapped
   for (i = 0; i < c1.n_sets; ++i) {
+	if (c1.LRU_head[i] == NULL) {
+		continue;
+	}
     if (c1.LRU_head[i]->dirty) {
 	  increment_cache_stat(ECS_COPIES_BACK, ~TRACE_INST_LOAD); // All remained dirty bit is data bit.
 	  c1.LRU_head[i]->dirty = FALSE;
