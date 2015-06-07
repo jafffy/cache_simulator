@@ -82,10 +82,10 @@ void init_cache()
 {
   // Use c1 as Unified cache
   c1.size = cache_usize;
-  c1.associativity = 1;
+  c1.associativity = cache_assoc;
   c1.n_sets = c1.size / (cache_block_size * c1.associativity);
   c1.index_mask = c1.n_sets - 1;
-  c1.index_mask_offset = LOG2(c1.index_mask); // what is it...
+  c1.index_mask_offset = LOG2(c1.index_mask);
 
   c1.set_contents = (int*)malloc(sizeof(int)*c1.n_sets);
   {
@@ -205,10 +205,10 @@ void perform_access(addr, access_type)
   increment_cache_stat(ECS_ACCESSES, access_type);
 
   // calculate index and tag
-  idx = (addr & c1.index_mask);
-  tag = (addr & ~c1.index_mask) >> c1.index_mask_offset;
+  idx = ((addr >> WORD_SIZE_OFFSET) & c1.index_mask);
+  tag = ((addr >> WORD_SIZE_OFFSET) & ~c1.index_mask) >> c1.index_mask_offset;
 
-  if (c1.LRU_head[idx] == NULL) {
+  if (c1.associativity > c1.set_contents[idx]) {
 	Pcache_line cl = NULL;
 	increment_cache_stat(ECS_MISSES, access_type);
 	increment_cache_stat(ECS_DEMAND_FETCHES, access_type);
@@ -220,6 +220,7 @@ void perform_access(addr, access_type)
 	
 	insert(&c1.LRU_head[idx], &c1.LRU_tail[idx], cl);
 	c1.set_contents[idx]++;
+	c1.contents++;
   } else if (access_type == 0 || access_type == 2) { // read
     Pcache_line head = c1.LRU_head[idx], tail = c1.LRU_tail[idx];
 	Pcache_line finder = findSameTag(&head, &tail, tag);
@@ -254,9 +255,10 @@ void perform_access(addr, access_type)
 		increment_cache_stat(ECS_COPIES_BACK, access_type);
 	  } else if (cache_writeback && finder->dirty) {
 		increment_cache_stat(ECS_COPIES_BACK, access_type);
+		increment_cache_stat(ECS_REPLACEMENTS, access_type);
 	  } else if (cache_writeback == FALSE) {
 		increment_cache_stat(ECS_COPIES_BACK, access_type);
-		finder->dirty = FALSE;
+		increment_cache_stat(ECS_REPLACEMENTS, access_type);
 	  }
 	}
   }
