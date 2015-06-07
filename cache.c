@@ -180,6 +180,10 @@ void increment_cache_stat(enum E_CACHE_STAT cache_stat, unsigned access_type)
   }
 }
 
+void perform_access_cache(Pcache c)
+{
+}
+
 /************************************************************/
 /* handle an access to the cache */
 void perform_access(addr, access_type)
@@ -241,7 +245,7 @@ void perform_access(addr, access_type)
 	error_handling("read end");
   } else if (access_type == 1) { // write
     error_handling("write");
-	if (finder) { // found!
+	if (finder == FALSE) { // found!
 	  increment_cache_stat(ECS_MISSES, access_type);
 	  
 	  finder->dirty = TRUE;
