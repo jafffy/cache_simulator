@@ -64,7 +64,7 @@ void init_cache();
 void destory_cache();
 void perform_access();
 void flush();
-int	 isIn();
+Pcache_line isIn();
 void delete();
 void insert();
 void dump_settings();

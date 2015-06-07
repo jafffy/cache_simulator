@@ -80,41 +80,48 @@ void set_cache_param(param, value)
 /************************************************************/
 void init_cache()
 {
-  // Use c1 as Unified cache
-  c1.size = cache_usize;
-  c1.associativity = cache_assoc;
-  c1.n_sets = c1.size / (cache_block_size * c1.associativity);
-  c1.index_mask = c1.n_sets - 1;
-  c1.index_mask_offset = LOG2(c1.index_mask);
+  error_handling("init_cache");
+  int i;
+  Pcache c[2] = { &c1, &c2 };
+  int cache_size[2] = { cache_isize, cache_dsize };
+  for (i = 0; i < (cache_split ? 2 : 1); ++i) {
+	c[i]->size = cache_split ? cache_size[i] : cache_usize;
+    c[i]->associativity = cache_assoc;
+    c[i]->n_sets = c[i]->size / (cache_block_size * c[i]->associativity);
+    c[i]->index_mask = c[i]->n_sets - 1;
+    c[i]->index_mask_offset = LOG2(c[i]->index_mask);
 
-  c1.set_contents = (int*)malloc(sizeof(int)*c1.n_sets);
-  {
-    int i;
-	for (i = 0; i < c1.n_sets; ++i) {
-	  c1.set_contents[i] = 0;
-	}
-  }
+    c[i]->set_contents = (int*)malloc(sizeof(int)*c[i]->n_sets);
+    {
+      int j;
+	  for (j = 0; j < c[i]->n_sets; ++j) {
+	    c[i]->set_contents[j] = 0;
+	  }
+    }
 
-  c1.contents = 0;
+    c[i]->contents = 0;
 
-  c1.LRU_head = (Pcache_line*)malloc(sizeof(Pcache_line)*c1.n_sets);
-  {
-    int i;
-	for (i = 0; i < c1.n_sets; ++i) {
-	  c1.LRU_head[i] = NULL;
-	}
-  }
-  c1.LRU_tail = (Pcache_line*)malloc(sizeof(Pcache_line)*c1.n_sets);
-  {
-	int i;
-	for (i = 0; i < c1.n_sets; ++i) {
-	  c1.LRU_tail[i] = NULL;
-	}
+    c[i]->LRU_head = (Pcache_line*)malloc(sizeof(Pcache_line)*c[i]->n_sets);
+    {
+      int j;
+	  for (j = 0; j < c[i]->n_sets; ++j) {
+	    c[i]->LRU_head[j] = NULL;
+	  }
+    }
+    c[i]->LRU_tail = (Pcache_line*)malloc(sizeof(Pcache_line)*c[i]->n_sets);
+    {
+	  int j;
+	  for (j = 0; j < c[i]->n_sets; ++j) {
+	    c[i]->LRU_tail[j] = NULL;
+	  }
+    }
   }
 
   // statistics setting 
   memset(&cache_stat_inst, 0, sizeof(cache_stat));
   memset(&cache_stat_data, 0, sizeof(cache_stat));
+
+  error_handling("init end");
 }
 /************************************************************/
 
@@ -180,34 +187,32 @@ void increment_cache_stat(enum E_CACHE_STAT cache_stat, unsigned access_type)
   }
 }
 
-void perform_access_cache(Pcache c)
-{
-}
-
 /************************************************************/
 /* handle an access to the cache */
 void perform_access(addr, access_type)
   unsigned addr, access_type;
 {
   int idx, tag;
+  Pcache c[2] = { &c1, &c2 };
+  Pcache ch = (cache_split && (access_type != TRACE_INST_LOAD)) ? c[1] : c[0];
 
   increment_cache_stat(ECS_ACCESSES, access_type);
 
   // calculate index and tag
-  idx = ((addr >> (LOG2(words_per_block) + WORD_SIZE_OFFSET)) & c1.index_mask);
-  tag = ((addr >> (LOG2(words_per_block) + WORD_SIZE_OFFSET)) & ~c1.index_mask) >> c1.index_mask_offset;
+  idx = ((addr >> (LOG2(words_per_block) + WORD_SIZE_OFFSET)) & ch->index_mask);
+  tag = ((addr >> (LOG2(words_per_block) + WORD_SIZE_OFFSET)) & ~ch->index_mask) >> ch->index_mask_offset;
 
-  Pcache_line *head = &c1.LRU_head[idx], *tail = &c1.LRU_tail[idx];
+  Pcache_line *head = &ch->LRU_head[idx], *tail = &ch->LRU_tail[idx];
   Pcache_line finder = *tail;
-  int found = FALSE;
+  
   if (*head) {
 	error_handling("find");
-    found = isIn(head, tail, tag);
+    finder = isIn(head, tail, tag);
 	error_handling("find end");
   }
 
-  if (c1.set_contents[idx] == 0
-	  || found == FALSE && c1.associativity > c1.set_contents[idx]) {
+  if (ch->set_contents[idx] == 0
+	  || finder == NULL && ch->associativity > ch->set_contents[idx]) {
 	error_handling("cold miss");
 	Pcache_line cl = NULL;
 	increment_cache_stat(ECS_MISSES, access_type);
@@ -215,16 +220,18 @@ void perform_access(addr, access_type)
 
 	cl = (Pcache_line)malloc(sizeof(cache_line));
 	cl->tag = tag;
-	cl->dirty = access_type == 1 && cache_writeback ? TRUE : FALSE;
+	cl->dirty = ((access_type == TRACE_DATA_STORE) && cache_writeback) ? TRUE : FALSE;
 	cl->LRU_next = cl->LRU_prev = NULL;
 	
 	insert(head, tail, cl);
-	c1.set_contents[idx]++;
-	c1.contents++;
+	ch->set_contents[idx]++;
+	ch->contents++;
 	error_handling("cold miss end");
-  } else if (access_type == 0 || access_type == 2) { // read
+  } else if (access_type == TRACE_INST_LOAD || access_type == TRACE_DATA_LOAD) { // read
     error_handling("read");
-	if (found == FALSE) { // found!
+	if (finder == NULL) { // found!
+	  finder = *tail;
+
 	  increment_cache_stat(ECS_MISSES, access_type);
 	  increment_cache_stat(ECS_DEMAND_FETCHES, access_type);
 	  increment_cache_stat(ECS_REPLACEMENTS, access_type);
@@ -241,11 +248,16 @@ void perform_access(addr, access_type)
 	  delete(head, tail, finder);
 	  error_handling("insert");
 	  insert(head, tail, finder);
+	} else {
+	  delete(head, tail, finder);
+	  insert(head, tail, finder);
 	}
 	error_handling("read end");
-  } else if (access_type == 1) { // write
+  } else if (access_type == TRACE_DATA_STORE) { // write
     error_handling("write");
-	if (finder == FALSE) { // found!
+	if (finder == NULL) { // found!
+	  finder = *tail;
+
 	  increment_cache_stat(ECS_MISSES, access_type);
 	  
 	  finder->dirty = TRUE;
@@ -266,6 +278,9 @@ void perform_access(addr, access_type)
 
 	  delete(head, tail, finder);
 	  insert(head, tail, finder);
+	} else {
+	  delete(head, tail, finder);
+	  insert(head, tail, finder);
 	}
 	error_handling("write end");
   }
@@ -277,10 +292,10 @@ void perform_access(addr, access_type)
 void flush()
 {
   int i;
+  Pcache ch = cache_split ? &c1 : &c2;
 
-  // directed mapped
-  for (i = 0; i < c1.n_sets; ++i) {
-	Pcache_line accessor = c1.LRU_head[i], tail = c1.LRU_tail[i];
+  for (i = 0; i < ch->n_sets; ++i) {
+	Pcache_line accessor = ch->LRU_head[i], tail = ch->LRU_tail[i];
 	if (accessor == NULL) {
 	  continue;
 	}
@@ -302,7 +317,7 @@ void flush()
 /************************************************************/
 
 /************************************************************/
-int isIn(head, tail, tag)
+Pcache_line isIn(head, tail, tag)
   Pcache_line *head, *tail;
   unsigned tag;
 {
@@ -311,16 +326,16 @@ int isIn(head, tail, tag)
   while (accessor != *tail) {
 	assert(accessor);
     if (accessor->tag == tag) {
-	  return TRUE;
+	  return accessor;
 	}
 
 	accessor = accessor->LRU_next;
   }
   if (*tail && (*tail)->tag == tag) {
-	return TRUE;
+	return *tail;
   }
 
-  return FALSE;
+  return NULL;
 }
 /************************************************************/
 
