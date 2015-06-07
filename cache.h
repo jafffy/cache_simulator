@@ -64,12 +64,15 @@ void init_cache();
 void destory_cache();
 void perform_access();
 void flush();
-Pcache_line findDifferentTag();
+int	 isIn();
 void delete();
 void insert();
 void dump_settings();
 void print_stats();
-
+#ifndef DEBUG
+// #define DEBUG
+#endif // DEBUG
+void error_handling(const char* msg);
 
 /* macros */
 #define LOG2(x) ((int) rint((log((double) (x))) / (log(2.0))))
